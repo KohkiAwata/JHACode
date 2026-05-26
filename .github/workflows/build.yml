@@ -2,9 +2,16 @@ name: Build PDF
 
 on:
   push:
+    branches:
+      - master
     paths:
       - "main.typ"
       - "convert.py"
+
+# リポジトリへの書き込み（コミット、リリース作成）と、PR情報の読み取りに必要な権限を明記
+permissions:
+  contents: write
+  pull-requests: read
 
 jobs:
   build:
@@ -50,6 +57,30 @@ jobs:
         run: |
           echo "name=v$(date +'%Y-%m-%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      # ── マージされたPR情報を取得 ──
+      - name: Fetch merged PR info
+        id: pr_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 実行中のコミットSHAに紐づくPull RequestをGitHub APIから取得
+          PR_DATA=$(gh api /repos/${{ github.repository }}/commits/${{ github.sha }}/pulls --jq '.[0]')
+
+          if [ "$PR_DATA" = "null" ] || [ -z "$PR_DATA" ]; then
+            PR_TEXT="関連するPRはありません（直接のPushなど）"
+          else
+            PR_NUM=$(echo "$PR_DATA" | jq -r '.number')
+            PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+            PR_URL=$(echo "$PR_DATA" | jq -r '.html_url')
+            PR_TEXT="- PR [#${PR_NUM}](${PR_URL}): ${PR_TITLE}"
+          fi
+
+          # 複数行出力の安全な渡し方
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "text<<$EOF" >> "$GITHUB_OUTPUT"
+          echo "$PR_TEXT" >> "$GITHUB_OUTPUT"
+          echo "$EOF" >> "$GITHUB_OUTPUT"
+
       # ── Release を作成して PDF を添付 ──
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -58,6 +89,9 @@ jobs:
           name: ${{ steps.tag.outputs.name }}
           body: |
             main.typ の変更により自動生成されました。
+
+            **マージされたPR:**
+            ${{ steps.pr_info.outputs.text }}
 
             **コミット:** ${{ github.sha }}
           files: main.pdf
